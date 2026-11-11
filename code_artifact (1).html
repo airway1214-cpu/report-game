@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>疊報大作戰：簡報積木塔</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Matter.js 2D 物理引擎 CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <style>
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background-color: rgba(156, 163, 175, 0.5);
+      border-radius: 9999px;
+    }
+    @keyframes pulse-subtle {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.04); }
+    }
+    .pulse-warning {
+      animation: pulse-subtle 0.6s infinite ease-in-out;
+    }
+
+    /* 輸送帶齒條背景滾動動畫 */
+    @keyframes conveyorMove {
+      from { background-position: 0 0; }
+      to { background-position: -48px 0; }
+    }
+    .conveyor-track {
+      background-image: repeating-linear-gradient(
+        -45deg,
+        rgba(51, 65, 85, 0.45),
+        rgba(51, 65, 85, 0.45) 8px,
+        rgba(30, 41, 59, 0.8) 8px,
+        rgba(30, 41, 59, 0.8) 16px
+      );
+      background-size: 24px 24px;
+      animation: conveyorMove 0.48s linear infinite;
+    }
+    .conveyor-track.paused {
+      animation-play-state: paused;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 h-screen w-screen overflow-hidden flex flex-col justify-between select-none">
+
+  <!-- ================= TOP HEADER HUD ================= -->
+  <header class="w-full bg-slate-950/90 border-b border-slate-800 px-4 py-2 flex items-center justify-between z-20 shadow-md">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-black text-white shadow">
+        🧱
+      </div>
+      <div>
+        <h1 class="text-sm sm:text-base font-black tracking-wide text-white flex items-center gap-2">
+          <span>疊報大作戰</span>
+          <span class="text-[10px] font-normal px-2 py-0.5 rounded bg-indigo-900/60 text-indigo-300 border border-indigo-700/50">簡報積木塔</span>
+        </h1>
+        <p class="text-[11px] text-slate-400 hidden sm:block">60秒取捨修煉：平衡結構，決定你的上台命運</p>
+      </div>
+    </div>
+
+    <!-- 儀表狀態區 -->
+    <div class="flex items-center gap-3 sm:gap-6">
+      <!-- 積木數量 -->
+      <div class="flex items-center gap-1.5 text-xs bg-slate-900 border border-slate-700/70 px-3 py-1.5 rounded-xl shadow-inner">
+        <span class="text-slate-400">台上積木:</span>
+        <span id="stacked-count" class="font-extrabold text-white text-sm">0</span>
+      </div>
+
+      <!-- 穩定度監控 -->
+      <div id="stability-badge" class="flex items-center gap-2 text-xs bg-slate-900 border border-slate-700/70 px-3 py-1.5 rounded-xl shadow-inner">
+        <span class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+        <span id="stability-text" class="text-slate-400 font-bold">等待開始</span>
+      </div>
+
+      <!-- 60秒倒數計時器 -->
+      <div id="timer-box" class="flex items-center gap-2 bg-slate-900 border border-slate-700 px-3.5 py-1.5 rounded-xl transition-all shadow-inner">
+        <span class="text-xs text-slate-400">剩餘:</span>
+        <span id="timer-label" class="font-black text-amber-400 text-sm sm:text-base font-mono tracking-tight">60.0</span>
+        <span class="text-xs text-slate-400">秒</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= MAIN PHYSICS STAGE ================= -->
+  <main class="relative flex-1 w-full overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 flex flex-col items-center justify-center">
+    <!-- 舞台投射光與格線背景 -->
+    <div class="absolute inset-0 bg-[radial-gradient(circle_at_center_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-transparent to-transparent pointer-events-none"></div>
+    <div class="absolute inset-0 bg-[linear-gradient(to_right,#33415510_1px,transparent_1px),linear-gradient(to_bottom,#33415510_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none"></div>
+
+    <!-- 舞台上方提示浮水印 -->
+    <div class="absolute top-3 text-xs font-semibold tracking-wider text-slate-400 pointer-events-none flex items-center gap-2 bg-slate-800/80 px-3.5 py-1.5 rounded-full border border-slate-700/80 shadow-md backdrop-blur z-10">
+      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+      <span>可按住下方滾動積木<strong>拖曳至舞台任一位置放開</strong>，亦可直接點擊發射！</span>
+    </div>
+
+    <!-- Matter.js Canvas 容器 -->
+    <div id="canvas-container" class="w-full h-full relative cursor-crosshair"></div>
+
+    <!-- 滑鼠懸停積木時的即時完整文字浮動卡片 (Hover Tooltip) -->
+    <div id="brick-hover-tooltip" class="absolute pointer-events-none hidden px-3 py-1.5 rounded-lg bg-slate-950/95 border border-indigo-400/80 text-xs font-bold text-white shadow-2xl backdrop-blur z-30 transition-opacity">
+      <span id="tooltip-text">積木名稱</span>
+    </div>
+
+    <!-- 拖曳中即時跟隨游標的半透明預覽幽靈 (Drag Ghost) -->
+    <div id="drag-ghost" class="fixed pointer-events-none hidden z-50 flex items-center justify-center text-center p-2 rounded-lg border-2 border-dashed border-white shadow-2xl backdrop-blur font-bold text-xs text-white" style="transform: translate(-50%, -50%);">
+      <span id="drag-ghost-text">拖曳中</span>
+    </div>
+  </main>
+
+  <!-- ================= BOTTOM CONVEYOR DOCK ================= -->
+  <footer class="w-full bg-slate-950 border-t border-slate-700/80 z-20 flex flex-col">
+    <!-- 輸送帶狀態欄 -->
+    <div class="px-4 py-1.5 bg-slate-900/90 border-b border-slate-800/80 flex items-center justify-between text-xs">
+      <div class="flex items-center gap-2 font-bold text-slate-300">
+        <span class="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+        <span>動態滾動輸送帶 (Conveyor Belt)</span>
+        <span class="text-[11px] font-normal text-slate-400 hidden sm:inline">・積木緩緩由右至左滑動，隨時抓取或點選</span>
+      </div>
+      <div class="flex items-center gap-2 text-[11px] text-slate-400">
+        <span>滾動速度:</span>
+        <button id="conveyor-toggle-speed" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-semibold border border-slate-700">
+          正常速
+        </button>
+      </div>
+    </div>
+
+    <!-- 輸送帶主滾動軌道容器 (Conveyor Track) -->
+    <div class="relative w-full h-[98px] sm:h-[105px] overflow-hidden conveyor-track flex items-center px-2" id="conveyor-container">
+      <!-- 左右滾輪金屬裝飾條 -->
+      <div class="absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-slate-950 via-slate-950/80 to-transparent pointer-events-none z-10 flex items-center">
+        <div class="w-1.5 h-12 bg-slate-700 rounded-r border border-slate-600"></div>
+      </div>
+      <div class="absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-slate-950 via-slate-950/80 to-transparent pointer-events-none z-10 flex items-center justify-end">
+        <div class="w-1.5 h-12 bg-slate-700 rounded-l border border-slate-600"></div>
+      </div>
+
+      <!-- 動態掛載與橫移的積木實體軌道 -->
+      <div id="conveyor-track-inner" class="relative w-full h-full flex items-center">
+        <!-- 由 JavaScript 動態生成並連續平移的卡片節點 -->
+      </div>
+    </div>
+  </footer>
+
+  <!-- ================= MODAL: 遊戲說明 (INTRO) ================= -->
+  <div id="intro-modal" class="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
+    <div class="bg-slate-900 border border-slate-700 max-w-lg w-full rounded-2xl shadow-2xl p-6 sm:p-7 flex flex-col">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-xl">
+          🎯
+        </div>
+        <div>
+          <h2 class="text-lg font-black text-white">簡報準備的「取捨修煉」</h2>
+          <p class="text-xs text-slate-400">真實的報告準備，沒有顯而易見的爛點子，只有配比與重量的考驗</p>
+        </div>
+      </div>
+
+      <div class="space-y-3.5 text-slate-300 text-sm leading-relaxed mb-6">
+        <div class="bg-slate-800/70 p-3.5 rounded-xl border border-slate-700/60">
+          <p class="font-semibold text-white mb-1 flex items-center gap-2">
+            <span class="text-amber-400">●</span> 底部輪轉輸送帶，動態挑選積木
+          </p>
+          <p class="text-xs text-slate-300">
+            各種準備事項會像<strong>輸送帶一樣持續由右向左滾動</strong>。你可以直接點擊讓它從上方落下，或<strong>按住卡片直接拖曳到舞台你想放置的高度與位置放開</strong>！
+          </p>
+        </div>
+
+        <div class="bg-slate-800/70 p-3.5 rounded-xl border border-slate-700/60">
+          <p class="font-semibold text-white mb-1 flex items-center gap-2">
+            <span class="text-emerald-400">●</span> 積木實時印上文字，隨時檢視結構
+          </p>
+          <p class="text-xs text-slate-300">
+            掉落舞台的每一塊積木本體都<strong>清晰印著該項目的文字</strong>。滑鼠懸停還可以預覽完整說明，讓你一眼看清楚當前發表塔到底裝了哪些內容！
+          </p>
+        </div>
+
+        <div class="bg-slate-800/70 p-3.5 rounded-xl border border-slate-700/60">
+          <p class="font-semibold text-white mb-1 flex items-center gap-2">
+            <span class="text-indigo-400">●</span> 60 秒後上台：你的組合決定全場命運
+          </p>
+          <p class="text-xs text-slate-300">
+            倒數結束後，系統會檢定留存積木的「重心、配比與類型」，演繹出真實的<strong>台上慘案／教科書發表</strong>與<strong>台下真實評論</strong>！
+          </p>
+        </div>
+      </div>
+
+      <button id="start-btn" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-black text-sm tracking-wide shadow-lg shadow-indigo-600/30 transition transform active:scale-98">
+        開始挑戰 (倒數 60 秒) →
+      </button>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: 發表會結算 (RESULT) ================= -->
+  <div id="result-modal" class="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 p-4 hidden">
+    <div class="bg-slate-900 border border-slate-700 max-w-xl w-full rounded-2xl shadow-2xl p-6 sm:p-7 flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar">
+      
+      <!-- 步驟 1：台上即時實況記錄 (率先呈現現場發生了什麼事) -->
+      <div class="bg-slate-950/90 p-4 rounded-xl border border-slate-800 mb-4 shadow-inner">
+        <div class="flex items-center justify-between mb-2 pb-1.5 border-b border-slate-800">
+          <div class="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+            <span class="animate-pulse">🔴</span>
+            <span>現場實況速記 (Stage Playback)</span>
+          </div>
+          <span class="text-[11px] text-slate-400 font-mono">發表結束即時回放</span>
+        </div>
+        <p id="result-stage-scene" class="text-xs sm:text-sm text-slate-200 leading-relaxed space-y-1.5"></p>
+      </div>
+
+      <!-- 步驟 2：台下交鋒與同儕/評審真實聲音 -->
+      <div class="bg-indigo-950/30 p-4 rounded-xl border border-indigo-900/60 mb-4">
+        <div class="text-xs font-bold text-indigo-400 mb-2 flex items-center justify-between">
+          <span class="flex items-center gap-1.5">
+            <span>🎙️</span>
+            <span id="result-critique-role">台下真實反饋</span>
+          </span>
+          <span class="text-[10px] text-indigo-300/70">Q&A 現場收音</span>
+        </div>
+        <div id="result-critique-text" class="text-xs sm:text-sm text-indigo-200 leading-relaxed space-y-2"></div>
+      </div>
+
+      <!-- 步驟 3：綜合實況與評論，由全場反應自然凝聚出的「專屬發表稱號」 -->
+      <div class="p-4 rounded-xl border mb-4 transition-all" id="result-verdict-box">
+        <div class="flex items-center justify-between mb-1.5">
+          <span id="result-badge" class="text-[10px] sm:text-xs font-bold px-2.5 py-0.5 rounded-full border">
+            現場總結
+          </span>
+          <span class="text-[11px] text-slate-400">發表定調 (Final Verdict)</span>
+        </div>
+        <h2 id="result-title" class="text-base sm:text-lg font-black text-white leading-snug">
+          專屬稱號生成中...
+        </h2>
+      </div>
+
+      <!-- 留存的積木標籤 -->
+      <div class="mb-4">
+        <p class="text-xs font-bold text-slate-400 mb-2">本次成功留存的積木組合：</p>
+        <div id="result-used-bricks" class="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto custom-scrollbar p-1"></div>
+      </div>
+
+      <!-- 避坑指南與指引 -->
+      <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700/60 mb-6">
+        <p class="text-xs font-bold text-slate-200 mb-2 flex items-center gap-1.5">
+          <span>💡</span>
+          <span>簡報修煉指引：</span>
+        </p>
+        <ul id="result-advice-list" class="text-xs text-slate-300 space-y-1.5 list-disc pl-4"></ul>
+      </div>
+
+      <!-- 再玩一次 -->
+      <button id="restart-btn" class="w-full py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-black text-sm tracking-wide border border-slate-600 transition transform active:scale-98">
+        重新挑戰 ↺
+      </button>
+    </div>
+  </div>
+
+  <!-- ================= JAVASCRIPT LOGIC ================= -->
+  <script>
+    /* ==========================================================
+       1. 音效系統 (Web Audio API 合成，無外部 URL 依賴)
+       ========================================================== */
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+
+    function getAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new AudioContext();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return audioCtx;
+    }
+
+    function playBeep(freq = 440, type = 'sine', duration = 0.1, gainVal = 0.1) {
+      try {
+        const ctx = getAudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(gainVal, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration);
+      } catch (e) {
+        // 音效播放失敗時靜音容錯
+      }
+    }
+
+    function soundClick() { playBeep(520, 'triangle', 0.08, 0.08); }
+    function soundDrop() { playBeep(320, 'sine', 0.15, 0.12); }
+    function soundWarning() { playBeep(260, 'sawtooth', 0.25, 0.15); }
+    function soundCollapse() {
+      playBeep(140, 'sawtooth', 0.5, 0.25);
+      setTimeout(() => playBeep(90, 'square', 0.6, 0.3), 120);
+    }
+    function soundSuccess() {
+      playBeep(523.25, 'sine', 0.2, 0.12);
+      setTimeout(() => playBeep(659.25, 'sine', 0.2, 0.12), 120);
+      setTimeout(() => playBeep(783.99, 'sine', 0.35, 0.15), 240);
+    }
+
+    /* ==========================================================
+       2. 完整的 40 款中性化積木資料庫 (BRICK_DATABASE)
+       ========================================================== */
+    const BRICK_DATABASE = [
+      // 一、 核心骨架類 (foundation) - 體積寬厚、摩擦力高、重
+      { id: 'A01', name: '定義本次報告聚焦探討的核心問題', tag: 'foundation', color: '#475569', w: 180, h: 42, mass: 2.8, friction: 0.95 },
+      { id: 'A02', name: '提煉最關鍵的具體發現與行動建議', tag: 'foundation', color: '#475569', w: 160, h: 40, mass: 2.6, friction: 0.92 },
+      { id: 'A03', name: '梳理各項發現之間的因果推論脈絡', tag: 'foundation', color: '#475569', w: 150, h: 38, mass: 2.3, friction: 0.90 },
+      { id: 'A04', name: '歸納研究對當前現況帶來的實質改變', tag: 'foundation', color: '#475569', w: 150, h: 38, mass: 2.4, friction: 0.90 },
+
+      // 二、 結構與導引類 (signpost) - 扁平長板、極輕、跨接具鎖定穩定效果
+      { id: 'B01', name: '在開場列出今天預計說明的四大主軸', tag: 'signpost', color: '#0d9488', w: 200, h: 22, mass: 1.0, friction: 0.95 },
+      { id: 'B02', name: '在各章節過渡時加入進度指示條', tag: 'signpost', color: '#0d9488', w: 190, h: 22, mass: 1.0, friction: 0.95 },
+      { id: 'B03', name: '將複雜段落精煉為三行要點與關鍵字', tag: 'signpost', color: '#0d9488', w: 170, h: 24, mass: 1.1, friction: 0.90 },
+      { id: 'B04', name: '在投影片右上角標註當前討論的小節名稱', tag: 'signpost', color: '#0d9488', w: 180, h: 22, mass: 1.0, friction: 0.92 },
+
+      // 三、 數據與實證類 (evidence) - 方正、標準承重
+      { id: 'C01', name: '展示 200 份問卷的交叉統計圖表', tag: 'evidence', color: '#2563eb', w: 120, h: 42, mass: 1.9, friction: 0.85 },
+      { id: 'C02', name: '引用三位受訪者的代表性深度訪談語錄', tag: 'evidence', color: '#2563eb', w: 130, h: 40, mass: 1.8, friction: 0.85 },
+      { id: 'C03', name: '放上團隊實地蹲點觀察的現場照片與筆記', tag: 'evidence', color: '#2563eb', w: 125, h: 40, mass: 1.8, friction: 0.85 },
+      { id: 'C04', name: '整理近三年相關產業的量化趨勢比較', tag: 'evidence', color: '#2563eb', w: 135, h: 42, mass: 2.0, friction: 0.88 },
+
+      // 四、 文獻與前人脈絡類 (literature) - 長條、偏重、放歪易失衡
+      { id: 'D01', name: '完整梳理過去十年國內外的經典理論脈絡', tag: 'literature', color: '#7c3aed', w: 160, h: 36, mass: 2.4, friction: 0.78 },
+      { id: 'D02', name: '對比不同學者對本議題的核心定義差異', tag: 'literature', color: '#7c3aed', w: 150, h: 36, mass: 2.3, friction: 0.78 },
+      { id: 'D03', name: '補充指標性案例的歷史發展背景', tag: 'literature', color: '#7c3aed', w: 155, h: 36, mass: 2.3, friction: 0.80 },
+      { id: 'D04', name: '說明本研究引用的權威研究架構來源', tag: 'literature', color: '#7c3aed', w: 145, h: 36, mass: 2.2, friction: 0.80 },
+
+      // 五、 邊界與反思類 (limitation) - 小巧靈活、修補縫隙
+      { id: 'E01', name: '說明本次研究在樣本涵蓋上的邊界與限制', tag: 'limitation', color: '#059669', w: 85, h: 34, mass: 1.1, friction: 0.88 },
+      { id: 'E02', name: '說明外部不可控變因對觀察結果的影響', tag: 'limitation', color: '#059669', w: 90, h: 34, mass: 1.1, friction: 0.88 },
+      { id: 'E03', name: '提出本套方案目前適用的具體情境範疇', tag: 'limitation', color: '#059669', w: 85, h: 34, mass: 1.0, friction: 0.90 },
+      { id: 'E04', name: '列出後續若有更多時間資源可補足的驗證方向', tag: 'limitation', color: '#059669', w: 95, h: 34, mass: 1.2, friction: 0.88 },
+
+      // 六、 預判與應答類 (defense) - 梯形楔子、側翼支撐
+      { id: 'F01', name: '將可能被質疑的延伸推論整理在附錄補充頁', tag: 'defense', color: '#d97706', shape: 'trapezoid', w: 130, h: 36, mass: 1.5, friction: 0.90 },
+      { id: 'F02', name: '主動說明當初排除另一種備選方案的考量', tag: 'defense', color: '#d97706', shape: 'trapezoid', w: 125, h: 36, mass: 1.5, friction: 0.90 },
+      { id: 'F03', name: '將報告中的專業術語整理成簡易名詞對照表', tag: 'defense', color: '#d97706', w: 120, h: 34, mass: 1.4, friction: 0.88 },
+      { id: 'F04', name: '準備以生活化案例解釋抽象理論的應答講稿', tag: 'defense', color: '#d97706', w: 125, h: 34, mass: 1.4, friction: 0.88 },
+
+      // 七、 團隊整合類 (teamwork) - 雙聯平衡、穩定中心
+      { id: 'G01', name: '排練每位組員上台發言的走位與銜接話術', tag: 'teamwork', color: '#0284c7', w: 140, h: 32, mass: 1.6, friction: 0.92 },
+      { id: 'G02', name: '規劃進入倒數兩分鐘時的組內時間打信號默契', tag: 'teamwork', color: '#0284c7', w: 135, h: 32, mass: 1.5, friction: 0.92 },
+      { id: 'G03', name: '統整全體組員投影片的字體、版面與色彩規範', tag: 'teamwork', color: '#0284c7', w: 145, h: 32, mass: 1.6, friction: 0.90 },
+      { id: 'G04', name: '分配問答時間各題型的主答與補充負責人', tag: 'teamwork', color: '#0284c7', w: 135, h: 32, mass: 1.5, friction: 0.90 },
+
+      // 八、 巨量資訊類 (heavy_clutter) - 極重鉛塊、表面滑溜
+      { id: 'H01', name: '忠實將研究的完整脈絡與講稿呈現在投影片上', tag: 'heavy_clutter', color: '#b91c1c', w: 180, h: 65, mass: 4.8, friction: 0.45 },
+      { id: 'H02', name: '直接放上最完整的原始數據交叉分析大表', tag: 'heavy_clutter', color: '#b91c1c', w: 170, h: 60, mass: 4.5, friction: 0.50 },
+      { id: 'H03', name: '完整詳述該產業長達三十年的演進歷史全貌', tag: 'heavy_clutter', color: '#b91c1c', w: 175, h: 62, mass: 4.6, friction: 0.48 },
+      { id: 'H04', name: '附上團隊這兩個月來完整的工作日誌與討論紀錄', tag: 'heavy_clutter', color: '#b91c1c', w: 165, h: 58, mass: 4.2, friction: 0.52 },
+
+      // 九、 視覺聚焦類 (rolling_visual) - 滑溜圓球、極易滾動帶垮整座塔
+      { id: 'I01', name: '為重要論點與文字加入動態逐字飛入轉場', tag: 'rolling_visual', color: '#ea580c', shape: 'arch', w: 110, h: 36, mass: 1.1, friction: 0.65, restitution: 0.1 },
+      { id: 'I02', name: '套用專業設計師等級的滿版深色系簡報模板', tag: 'rolling_visual', color: '#ea580c', shape: 'arch', w: 115, h: 38, mass: 1.2, friction: 0.68, restitution: 0.1 },
+      { id: 'I03', name: '穿插時下熱門的社群話題圖片作為換頁過場', tag: 'rolling_visual', color: '#ea580c', shape: 'arch', w: 105, h: 35, mass: 1.0, friction: 0.65, restitution: 0.1 },
+      { id: 'I04', name: '在開場與收尾處加入烘托氣氛的情境背景音效', tag: 'rolling_visual', color: '#ea580c', shape: 'arch', w: 110, h: 36, mass: 1.1, friction: 0.65, restitution: 0.1 },
+
+      // 十、 微幅微調類 (tilted_bias) - 帶有 5 度斜角、多塊累積會導致重心失控
+      { id: 'J01', name: '調整圖表縱軸起始點以突顯各季度的增長差異', tag: 'tilted_bias', color: '#c026d3', shape: 'tilted', tiltAngle: 0.12, w: 130, h: 36, mass: 1.8, friction: 0.70 },
+      { id: 'J02', name: '將少數受訪者的深刻觀點放大為焦點主標題', tag: 'tilted_bias', color: '#c026d3', shape: 'tilted', tiltAngle: 0.10, w: 135, h: 36, mass: 1.8, friction: 0.72 },
+      { id: 'J03', name: '將兩組高度相關的數據現象直接關聯為因果推論', tag: 'tilted_bias', color: '#c026d3', shape: 'tilted', tiltAngle: -0.11, w: 130, h: 36, mass: 1.8, friction: 0.70 },
+      { id: 'J04', name: '採用三維立體圖表以強化視覺上的立體透視感', tag: 'tilted_bias', color: '#c026d3', shape: 'tilted', tiltAngle: -0.13, w: 125, h: 36, mass: 1.7, friction: 0.68 }
+    ];
+
+    /* ==========================================================
+       3. 遊戲狀態機與全域變數擴充
+       ========================================================== */
+    const GAME_STATES = { INTRO: 'INTRO', PLAYING: 'PLAYING', SETTLING: 'SETTLING', RESULT: 'RESULT' };
+    let currentState = GAME_STATES.INTRO;
+    
+    let timeLeft = 60.0;
+    let timerInterval = null;
+    let basePlatformBody = null;
+
+    // 輸送帶動態管理陣列
+    let conveyorItems = []; // 包含 { element, brickData, x, speed }
+    let conveyorSpeed = 2.5; // 大幅提速：基礎移動速度 (px / frame)
+    let conveyorAnimFrame = null;
+    let isConveyorPaused = false;
+    let brickDeck = []; // 40 塊不重複發牌堆
+
+    // 拖曳互動狀態
+    let activeDragData = null; // 正在被拖曳的積木物件
+    const dragGhost = document.getElementById('drag-ghost');
+    const dragGhostText = document.getElementById('drag-ghost-text');
+    const hoverTooltip = document.getElementById('brick-hover-tooltip');
+    const tooltipText = document.getElementById('tooltip-text');
+
+    // Matter.js 模組縮寫
+    const { Engine, Render, Runner, Bodies, Composite, Constraint, Mouse, MouseConstraint, Vector, Body, Events } = Matter;
+    let engine, render, runner, world;
+
+    const container = document.getElementById('canvas-container');
+    let width = container.clientWidth || 800;
+    let height = container.clientHeight || 500;
+
+    /* ==========================================================
+       4. 初始化 Matter.js 物理舞台 + 自訂積木文字渲染 (afterRender)
+       ========================================================== */
+    function initPhysics() {
+      engine = Engine.create({
+        gravity: { x: 0, y: 1.25 }
+      });
+      world = engine.world;
+
+      render = Render.create({
+        element: container,
+        engine: engine,
+        options: {
+          width: width,
+          height: height,
+          wireframes: false,
+          background: 'transparent',
+          showAngleIndicator: false
+        }
+      });
+
+      Render.run(render);
+      runner = Runner.create();
+      Runner.run(runner, engine);
+
+      createStageBounds();
+      setupMouseInteraction();
+
+      // 監聽更新迴圈，計算重心與傾斜度
+      Events.on(engine, 'afterUpdate', onPhysicsUpdate);
+
+      // 【核心升級 2】：在積木剛體上方繪製中文文字與標籤
+      Events.on(render, 'afterRender', renderBrickLabelsOnCanvas);
+
+      // 監聽滑鼠在畫布上的移動，觸發 Hover Tooltip 預覽完整字句
+      setupHoverTooltip();
+    }
+
+    // 建立講台基座與世界邊界
+    function createStageBounds() {
+      // 大幅縮窄講台寬度（從原本 380px 縮小至 190px），強迫垂直堆疊與考驗重心
+      const podiumWidth = Math.min(200, Math.max(170, width * 0.28));
+      const podiumHeight = 28;
+      const podiumX = width / 2;
+      const podiumY = height - 90;
+
+      basePlatformBody = Bodies.rectangle(podiumX, podiumY, podiumWidth, podiumHeight, {
+        isStatic: true,
+        friction: 0.95,
+        render: {
+          fillStyle: '#1e293b',
+          strokeStyle: '#6366f1',
+          lineWidth: 3
+        },
+        label: 'BASE_PLATFORM'
+      });
+
+      // 講台立柱與底裝飾
+      const pillar = Bodies.rectangle(podiumX, podiumY + 50, podiumWidth * 0.45, 70, {
+        isStatic: true,
+        render: { fillStyle: '#0f172a' },
+        collisionFilter: { group: -1 }
+      });
+
+      // 底部掉落感應界線
+      const floorSensor = Bodies.rectangle(width / 2, height + 90, width * 2, 60, {
+        isStatic: true,
+        isSensor: true,
+        label: 'FLOOR_DEADZONE'
+      });
+
+      Composite.add(world, [basePlatformBody, pillar, floorSensor]);
+    }
+
+    // 滑鼠與觸控拖曳物理世界剛體
+    function setupMouseInteraction() {
+      const mouse = Mouse.create(render.canvas);
+      const mouseConstraint = MouseConstraint.create(engine, {
+        mouse: mouse,
+        constraint: {
+          stiffness: 0.2,
+          render: { visible: false }
+        }
+      });
+      Composite.add(world, mouseConstraint);
+      render.mouse = mouse;
+    }
+
+    /* ==========================================================
+       【核心升級 2】：Canvas 積木實時繪製中文文字 + 自動換行
+       ========================================================== */
+    function renderBrickLabelsOnCanvas() {
+      const ctx = render.context;
+      const bodies = Composite.allBodies(world).filter(b => b.customData);
+
+      ctx.save();
+      bodies.forEach(body => {
+        const data = body.customData;
+        const pos = body.position;
+        const angle = body.angle;
+
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(angle);
+
+        // 依據形狀與大小計算文字尺寸
+        let boxW = data.w || (data.radius ? data.radius * 2 : 100);
+        let boxH = data.h || (data.radius ? data.radius * 2 : 40);
+
+        // 決定字級與每行字數
+        let fontSize = 11;
+        if (boxH < 26) fontSize = 9;
+        if (boxW > 160) fontSize = 12;
+
+        ctx.font = `bold ${fontSize}px "Noto Sans TC", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // 文字繪製：高對比白字 + 深色描邊陰影，確保在任何底色上都極度清晰
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+        ctx.shadowBlur = 4;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#020617';
+        ctx.fillStyle = '#ffffff';
+
+        // 智慧換行處理
+        const fullText = data.name;
+        const maxCharsPerLine = Math.max(4, Math.floor(boxW / (fontSize + 1)));
+        
+        let lines = [];
+        if (fullText.length <= maxCharsPerLine || boxH < 28) {
+          // 扁平木板或短文字只放單行，過長截斷加省略號
+          const truncated = fullText.length > maxCharsPerLine ? fullText.substring(0, maxCharsPerLine - 1) + '…' : fullText;
+          lines.push(truncated);
+        } else {
+          // 雙行排版
+          lines.push(fullText.substring(0, maxCharsPerLine));
+          let secondLine = fullText.substring(maxCharsPerLine);
+          if (secondLine.length > maxCharsPerLine) {
+            secondLine = secondLine.substring(0, maxCharsPerLine - 1) + '…';
+          }
+          lines.push(secondLine);
+        }
+
+        // 逐行輸出文字
+        const lineHeight = fontSize + 3;
+        const startY = -((lines.length - 1) * lineHeight) / 2;
+
+        lines.forEach((line, i) => {
+          const y = startY + i * lineHeight;
+          ctx.strokeText(line, 0, y);
+          ctx.fillText(line, 0, y);
+        });
+
+        ctx.restore();
+      });
+      ctx.restore();
+    }
+
+    // 滑鼠懸停（Hover）在畫布上方積木時，顯示完整說明的 Tooltip
+    function setupHoverTooltip() {
+      render.canvas.addEventListener('mousemove', (e) => {
+        if (currentState !== GAME_STATES.PLAYING && currentState !== GAME_STATES.RESULT) {
+          hoverTooltip.classList.add('hidden');
+          return;
+        }
+
+        const rect = render.canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        // 搜尋目前滑鼠底下的物理剛體
+        const bodies = Composite.allBodies(world).filter(b => b.customData);
+        let hoveredBody = null;
+
+        for (let b of bodies) {
+          if (Matter.Bounds.contains(b.bounds, { x: mouseX, y: mouseY })) {
+            if (Matter.Vertices.contains(b.vertices, { x: mouseX, y: mouseY })) {
+              hoveredBody = b;
+              break;
+            }
+          }
+        }
+
+        if (hoveredBody && hoveredBody.customData) {
+          tooltipText.innerText = hoveredBody.customData.name;
+          hoverTooltip.style.left = `${e.clientX + 14}px`;
+          hoverTooltip.style.top = `${e.clientY - 28}px`;
+          hoverTooltip.classList.remove('hidden');
+        } else {
+          hoverTooltip.classList.add('hidden');
+        }
+      });
+
+      render.canvas.addEventListener('mouseleave', () => {
+        hoverTooltip.classList.add('hidden');
+      });
+    }
+
+    /* ==========================================================
+       【核心升級 1】：動態輪轉輸送帶系統 (Conveyor Belt)
+       ========================================================== */
+    const conveyorTrack = document.getElementById('conveyor-track-inner');
+    const conveyorContainer = document.getElementById('conveyor-container');
+
+    // 洗牌發牌池演算法 (Fisher-Yates Shuffle)，保證 40 塊全數輪過且不重複
+    function resetAndShuffleBrickDeck() {
+      brickDeck = [...BRICK_DATABASE];
+      for (let i = brickDeck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [brickDeck[i], brickDeck[j]] = [brickDeck[j], brickDeck[i]];
+      }
+    }
+
+    function getNextBrickFromDeck() {
+      if (brickDeck.length === 0) {
+        resetAndShuffleBrickDeck();
+      }
+      return brickDeck.pop();
+    }
+
+    function initConveyorSystem() {
+      conveyorItems = [];
+      conveyorTrack.innerHTML = '';
+      resetAndShuffleBrickDeck();
+
+      // 初始化鋪設卡片，依序橫向排開從右方持續送入
+      let startX = 20;
+      for (let i = 0; i < 7; i++) {
+        const brick = getNextBrickFromDeck();
+        const item = createConveyorCardElement(brick, startX);
+        conveyorItems.push(item);
+        startX += item.width + 16;
+      }
+
+      startConveyorLoop();
+
+      // 速度切換鈕
+      const speedBtn = document.getElementById('conveyor-toggle-speed');
+      speedBtn.innerText = '快速 ⚡';
+      speedBtn.className = "px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold border border-indigo-500";
+      
+      speedBtn.onclick = () => {
+        if (conveyorSpeed === 2.5) {
+          conveyorSpeed = 3.8;
+          speedBtn.innerText = '極速 🚀';
+          speedBtn.className = "px-2 py-0.5 rounded bg-rose-600 text-white font-semibold border border-rose-500";
+        } else if (conveyorSpeed === 3.8) {
+          conveyorSpeed = 1.4;
+          speedBtn.innerText = '穩健 🐢';
+          speedBtn.className = "px-2 py-0.5 rounded bg-slate-800 text-amber-300 font-semibold border border-amber-600/40";
+        } else {
+          conveyorSpeed = 2.5;
+          speedBtn.innerText = '快速 ⚡';
+          speedBtn.className = "px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold border border-indigo-500";
+        }
+      };
+    }
+
+    function getRandomBrick() {
+      return getNextBrickFromDeck();
+    }
+
+    // 建立輸送帶卡片 DOM
+    function createConveyorCardElement(brickData, initialX) {
+      const card = document.createElement('div');
+      card.className = "absolute top-1/2 -translate-y-1/2 bg-slate-900 border border-slate-700 hover:border-amber-400 p-2.5 rounded-xl cursor-grab active:cursor-grabbing transition-shadow hover:shadow-lg flex items-center gap-2.5 select-none";
+      card.style.left = `${initialX}px`;
+
+      // 依積木長度決定卡片寬度
+      const cardWidth = Math.min(260, Math.max(180, (brickData.w || 120) + 70));
+      card.style.width = `${cardWidth}px`;
+
+      let shapeIcon = '■';
+      if (brickData.shape === 'circle') shapeIcon = '●';
+      if (brickData.shape === 'trapezoid') shapeIcon = '▲';
+      if (brickData.shape === 'tilted') shapeIcon = '▱';
+      if (brickData.tag === 'signpost') shapeIcon = '▬';
+
+      card.innerHTML = `
+        <div class="w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm shadow flex-shrink-0" style="background-color: ${brickData.color}25; color: ${brickData.color}; border: 1px solid ${brickData.color}50;">
+          ${shapeIcon}
+        </div>
+        <div class="flex-1 overflow-hidden pointer-events-none">
+          <p class="text-xs font-bold text-slate-100 line-clamp-2 leading-snug">${brickData.name}</p>
+          <span class="text-[10px] text-slate-400">按住拖曳 / 點擊放置</span>
+        </div>
+      `;
+
+      conveyorTrack.appendChild(card);
+
+      const itemObj = {
+        element: card,
+        brickData: brickData,
+        x: initialX,
+        width: cardWidth,
+        isDragging: false
+      };
+
+      // 綁定【核心升級 3】：點擊與按住拖曳事件
+      attachCardDragAndClick(itemObj);
+
+      return itemObj;
+    }
+
+    // 輸送帶常駐逐幀位移迴圈 (Conveyor Loop)
+    function startConveyorLoop() {
+      if (conveyorAnimFrame) cancelAnimationFrame(conveyorAnimFrame);
+
+      function loop() {
+        if (!isConveyorPaused && currentState === GAME_STATES.PLAYING) {
+          const containerWidth = conveyorContainer.clientWidth;
+
+          // 讓所有不在拖曳狀態的卡片往左移動
+          for (let i = conveyorItems.length - 1; i >= 0; i--) {
+            const item = conveyorItems[i];
+            if (!item.isDragging) {
+              item.x -= conveyorSpeed;
+              item.element.style.left = `${item.x}px`;
+
+              // 當卡片完全滑出左側邊界，移除並從右側補上全新積木
+              if (item.x + item.width < -30) {
+                conveyorTrack.removeChild(item.element);
+                conveyorItems.splice(i, 1);
+              }
+            }
+          }
+
+          // 保持右側隨時有新卡片進場
+          const maxRightX = conveyorItems.reduce((max, it) => Math.max(max, it.x + it.width), 0);
+          if (maxRightX < containerWidth + 240) {
+            const nextX = Math.max(containerWidth + 10, maxRightX + 16);
+            const newBrick = getNextBrickFromDeck();
+            const newItem = createConveyorCardElement(newBrick, nextX);
+            conveyorItems.push(newItem);
+          }
+        }
+        conveyorAnimFrame = requestAnimationFrame(loop);
+      }
+      conveyorAnimFrame = requestAnimationFrame(loop);
+    }
+
+    /* ==========================================================
+       【核心升級 3】：直覺拖曳放置 (Drag & Drop to Stage) + 點擊空降
+       ========================================================== */
+    function attachCardDragAndClick(itemObj) {
+      const el = itemObj.element;
+      let startPointerX = 0;
+      let startPointerY = 0;
+      let isMoved = false;
+
+      // 滑鼠懸停輸送帶時微幅暫停，方便玩家挑選
+      el.addEventListener('mouseenter', () => { isConveyorPaused = true; });
+      el.addEventListener('mouseleave', () => { 
+        if (!activeDragData) isConveyorPaused = false; 
+      });
+
+      function onPointerDown(e) {
+        if (currentState !== GAME_STATES.PLAYING) return;
+        const pageX = e.pageX || (e.touches && e.touches[0].pageX);
+        const pageY = e.pageY || (e.touches && e.touches[0].pageY);
+
+        startPointerX = pageX;
+        startPointerY = pageY;
+        isMoved = false;
+        itemObj.isDragging = true;
+        isConveyorPaused = true;
+
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('touchmove', onPointerMove, { passive: false });
+        window.addEventListener('touchend', onPointerUp);
+      }
+
+      function onPointerMove(e) {
+        const pageX = e.pageX || (e.touches && e.touches[0].pageX);
+        const pageY = e.pageY || (e.touches && e.touches[0].pageY);
+
+        const dist = Math.hypot(pageX - startPointerX, pageY - startPointerY);
+        if (dist > 10) {
+          isMoved = true;
+          activeDragData = itemObj.brickData;
+
+          // 顯示拖曳幽靈 (Drag Ghost)
+          dragGhost.classList.remove('hidden');
+          dragGhostText.innerText = itemObj.brickData.name;
+          dragGhost.style.left = `${pageX}px`;
+          dragGhost.style.top = `${pageY}px`;
+          dragGhost.style.backgroundColor = `${itemObj.brickData.color}cc`;
+          dragGhost.style.borderColor = '#ffffff';
+
+          const ghostW = Math.min(220, itemObj.brickData.w || 140);
+          dragGhost.style.width = `${ghostW}px`;
+        }
+      }
+
+      function onPointerUp(e) {
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('touchmove', onPointerMove);
+        window.removeEventListener('touchend', onPointerUp);
+
+        dragGhost.classList.add('hidden');
+        itemObj.isDragging = false;
+        isConveyorPaused = false;
+
+        const endX = e.pageX || (e.changedTouches && e.changedTouches[0].pageX) || startPointerX;
+        const endY = e.pageY || (e.changedTouches && e.changedTouches[0].pageY) || startPointerY;
+
+        const canvasRect = render.canvas.getBoundingClientRect();
+
+        if (isMoved) {
+          // 【拖曳放置】：判定是否落在舞台畫布區域內
+          if (
+            endX >= canvasRect.left &&
+            endX <= canvasRect.right &&
+            endY >= canvasRect.top &&
+            endY <= canvasRect.bottom - 40 // 避免直接放進講台底部
+          ) {
+            const dropStageX = endX - canvasRect.left;
+            const dropStageY = endY - canvasRect.top;
+
+            spawnBrickOnStage(itemObj.brickData, dropStageX, dropStageY);
+            removeConveyorCard(itemObj);
+            soundDrop();
+          }
+        } else {
+          // 【點擊放置】：直接點選卡片，從講台正上方居中降落
+          spawnBrickOnStage(itemObj.brickData, width / 2 + (Math.random() * 40 - 20), 80);
+          removeConveyorCard(itemObj);
+          soundClick();
+        }
+
+        activeDragData = null;
+      }
+
+      el.addEventListener('pointerdown', onPointerDown);
+    }
+
+    // 當卡片被使用後，從輸送帶平滑消除
+    function removeConveyorCard(itemObj) {
+      itemObj.element.style.transform = 'scale(0.8) translateY(-20px)';
+      itemObj.element.style.opacity = '0';
+      itemObj.element.style.transition = 'all 0.25s ease-out';
+
+      setTimeout(() => {
+        if (itemObj.element.parentNode) {
+          conveyorTrack.removeChild(itemObj.element);
+        }
+        const index = conveyorItems.indexOf(itemObj);
+        if (index > -1) conveyorItems.splice(index, 1);
+      }, 250);
+    }
+
+    /* ==========================================================
+       生成積木本體至物理世界
+       ========================================================== */
+    function spawnBrickOnStage(brickData, spawnX = null, spawnY = null) {
+      const x = spawnX !== null ? Math.max(60, Math.min(width - 60, spawnX)) : (width / 2 + (Math.random() * 60 - 30));
+      const y = spawnY !== null ? Math.max(50, spawnY) : 80;
+
+      let body = null;
+      const commonOpts = {
+        friction: brickData.friction || 0.8,
+        frictionAir: 0.02,
+        restitution: brickData.restitution || 0.05,
+        render: {
+          fillStyle: brickData.color,
+          strokeStyle: '#0f172a',
+          lineWidth: 2
+        }
+      };
+
+      if (brickData.shape === 'circle') {
+        body = Bodies.circle(x, y, brickData.radius, commonOpts);
+      } else if (brickData.shape === 'arch') {
+        // 改造為「圓角拱型多邊形」：帶有弧面但頂部有一定平坦度，能靠技巧疊上去
+        const bw = brickData.w;
+        const bh = brickData.h;
+        const verts = [
+          { x: -bw / 2, y: bh / 2 },
+          { x: bw / 2, y: bh / 2 },
+          { x: bw * 0.38, y: -bh / 2 },
+          { x: -bw * 0.38, y: -bh / 2 }
+        ];
+        body = Bodies.fromVertices(x, y, [verts], commonOpts);
+      } else if (brickData.shape === 'trapezoid') {
+        body = Bodies.trapezoid(x, y, brickData.w, brickData.h, 0.4, commonOpts);
+      } else if (brickData.shape === 'tilted') {
+        body = Bodies.rectangle(x, y, brickData.w, brickData.h, commonOpts);
+        Body.setAngle(body, brickData.tiltAngle || 0.08);
+      } else {
+        body = Bodies.rectangle(x, y, brickData.w, brickData.h, commonOpts);
+      }
+
+      Body.setMass(body, brickData.mass * 1.5);
+      body.customData = brickData;
+
+      Composite.add(world, body);
+    }
+
+    /* ==========================================================
+       5. 物理碰撞與狀態實時更新 (重心監控)
+       ========================================================== */
+    function onPhysicsUpdate() {
+      if (currentState !== GAME_STATES.PLAYING && currentState !== GAME_STATES.SETTLING) return;
+
+      const allBodies = Composite.allBodies(world);
+      const activeBricks = allBodies.filter(b => b.customData);
+
+      // 清理掉出舞台邊界的積木
+      activeBricks.forEach(b => {
+        if (b.position.y > height + 40 || b.position.x < -120 || b.position.x > width + 120) {
+          Composite.remove(world, b);
+        }
+      });
+
+      // 篩選留在基座上方的有效積木
+      const pBounds = basePlatformBody.bounds;
+      const validBricks = activeBricks.filter(b => {
+        return b.position.y < pBounds.min.y + 12 &&
+               b.position.x >= pBounds.min.x - 30 &&
+               b.position.x <= pBounds.max.x + 30;
+      });
+
+      document.getElementById('stacked-count').innerText = validBricks.length;
+
+      // 計算平均傾斜與重心
+      let totalAngle = 0;
+      let centerOfMassX = 0;
+      let totalMass = 0;
+
+      validBricks.forEach(b => {
+        const deg = Math.abs(b.angle * (180 / Math.PI)) % 180;
+        const normDeg = deg > 90 ? 180 - deg : deg;
+        totalAngle += normDeg;
+
+        centerOfMassX += b.position.x * b.mass;
+        totalMass += b.mass;
+      });
+
+      const avgAngle = validBricks.length > 0 ? (totalAngle / validBricks.length) : 0;
+      const comX = totalMass > 0 ? (centerOfMassX / totalMass) : (width / 2);
+      const offsetDist = Math.abs(comX - (width / 2));
+
+      updateStabilityHUD(avgAngle, offsetDist, validBricks.length);
+    }
+
+    // 儀表板視覺與警示
+    function updateStabilityHUD(avgAngle, offsetDist, count) {
+      const badge = document.getElementById('stability-badge');
+      const text = document.getElementById('stability-text');
+
+      if (count === 0) {
+        text.innerText = '等待開始';
+        text.className = 'text-slate-400 font-bold';
+        badge.children[0].className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
+        return;
+      }
+
+      // 隨著台面縮窄，重心偏移的判定更靈敏
+      if (avgAngle < 10 && offsetDist < 25) {
+        text.innerText = '極為穩固';
+        text.className = 'text-emerald-400 font-bold';
+        badge.children[0].className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse';
+      } else if (avgAngle < 20 && offsetDist < 55) {
+        text.innerText = '重心偏移';
+        text.className = 'text-amber-400 font-bold';
+        badge.children[0].className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping';
+      } else {
+        text.innerText = '嚴重失衡！';
+        text.className = 'text-rose-500 font-extrabold pulse-warning';
+        badge.children[0].className = 'w-2.5 h-2.5 rounded-full bg-rose-500 animate-bounce';
+        soundWarning();
+      }
+    }
+
+    /* ==========================================================
+       7. 計時器與流程控制 (啟動與結算)
+       ========================================================== */
+    function startGame() {
+      currentState = GAME_STATES.PLAYING;
+      timeLeft = 60.0;
+      document.getElementById('timer-label').innerText = '60.0';
+      document.getElementById('timer-box').className = "flex items-center gap-2 bg-slate-900 border border-slate-700 px-3.5 py-1.5 rounded-xl transition-all";
+
+      // 清除既有積木
+      const bodies = Composite.allBodies(world).filter(b => b.customData);
+      bodies.forEach(b => Composite.remove(world, b));
+
+      // 重啟輸送帶
+      initConveyorSystem();
+
+      // 關閉 Modal
+      document.getElementById('intro-modal').classList.add('hidden');
+      document.getElementById('result-modal').classList.add('hidden');
+
+      if (timerInterval) clearInterval(timerInterval);
+      const startTimestamp = Date.now();
+
+      timerInterval = setInterval(() => {
+        const elapsed = (Date.now() - startTimestamp) / 1000;
+        timeLeft = Math.max(0, 60.0 - elapsed);
+        document.getElementById('timer-label').innerText = timeLeft.toFixed(1);
+
+        if (timeLeft <= 10.0) {
+          const tBox = document.getElementById('timer-box');
+          tBox.classList.add('pulse-warning', 'border-rose-500', 'bg-rose-950/60');
+          if (Math.floor(timeLeft * 10) % 10 === 0) {
+            playBeep(880, 'sine', 0.05, 0.1);
+          }
+        }
+
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          startSettlingPhase();
+        }
+      }, 100);
+    }
+
+    function startSettlingPhase() {
+      currentState = GAME_STATES.SETTLING;
+      document.getElementById('timer-label').innerText = '結算判定';
+      document.getElementById('timer-box').className = "flex items-center gap-2 bg-indigo-900 border border-indigo-400 px-3.5 py-1.5 rounded-xl";
+
+      let settleCountdown = 3;
+      const settleInterval = setInterval(() => {
+        settleCountdown--;
+        if (settleCountdown <= 0) {
+          clearInterval(settleInterval);
+          evaluateFinalPresentation();
+        }
+      }, 1000);
+    }
+
+    /* ==========================================================
+       8. 發表會結算與診斷系統 (結算視窗渲染)
+       ========================================================== */
+    function evaluateFinalPresentation() {
+      currentState = GAME_STATES.RESULT;
+
+      // 統計留在講台上的積木清單與類別分佈
+      const pBounds = basePlatformBody.bounds;
+      const activeBricks = Composite.allBodies(world).filter(b => {
+        return b.customData &&
+               b.position.y < pBounds.min.y + 12 &&
+               b.position.x >= pBounds.min.x - 20 &&
+               b.position.x <= pBounds.max.x + 20;
+      });
+
+      const bricks = activeBricks.map(b => b.customData);
+      const totalCount = bricks.length;
+
+      // 計算物理堆疊狀態（平均傾角與重心偏移）
+      let totalAngle = 0;
+      let centerOfMassX = 0;
+      let totalMass = 0;
+
+      activeBricks.forEach(b => {
+        const deg = Math.abs(b.angle * (180 / Math.PI)) % 180;
+        const normDeg = deg > 90 ? 180 - deg : deg;
+        totalAngle += normDeg;
+        centerOfMassX += b.position.x * b.mass;
+        totalMass += b.mass;
+      });
+
+      const avgAngle = totalCount > 0 ? (totalAngle / totalCount) : 0;
+      const comX = totalMass > 0 ? (centerOfMassX / totalMass) : (width / 2);
+      const offsetDist = Math.abs(comX - (width / 2));
+
+      // 依標籤分組收集具體項目名稱
+      const tagGroups = {
+        foundation: [],
+        signpost: [],
+        evidence: [],
+        literature: [],
+        limitation: [],
+        defense: [],
+        teamwork: [],
+        heavy_clutter: [],
+        rolling_visual: [],
+        tilted_bias: []
+      };
+
+      bricks.forEach(b => {
+        if (tagGroups[b.tag]) {
+          tagGroups[b.tag].push(b.name);
+        }
+      });
+
+      // 【全新架構】：先生成現場實況與多方評論，再從中淬鍊出專屬發表稱號
+      let outcome = generateDynamicOutcome(bricks, tagGroups, totalCount, totalMass, avgAngle, offsetDist);
+
+      // 渲染結算畫面 (依據新佈局渲染)
+      document.getElementById('result-stage-scene').innerHTML = outcome.stageScene;
+      document.getElementById('result-critique-text').innerHTML = outcome.critiqueHtml;
+      document.getElementById('result-critique-role').innerText = outcome.critiqueRole;
+
+      // 最終產出的稱號與定調框
+      const verdictBox = document.getElementById('result-verdict-box');
+      verdictBox.className = `p-4 rounded-xl border mb-4 transition-all ${outcome.verdictBoxClass}`;
+      document.getElementById('result-badge').className = `text-[10px] sm:text-xs font-bold px-2.5 py-0.5 rounded-full border ${outcome.badgeClass}`;
+      document.getElementById('result-badge').innerText = outcome.badge;
+      document.getElementById('result-title').innerText = outcome.title;
+
+      const adviceList = document.getElementById('result-advice-list');
+      adviceList.innerHTML = '';
+      outcome.advice.forEach(adv => {
+        const li = document.createElement('li');
+        li.innerText = adv;
+        adviceList.appendChild(li);
+      });
+
+      // 顯示使用的積木標籤統計
+      const tagsContainer = document.getElementById('result-used-bricks');
+      tagsContainer.innerHTML = '';
+      bricks.forEach(b => {
+        const chip = document.createElement('span');
+        chip.className = "text-[11px] px-2.5 py-1 rounded-lg border text-white font-medium shadow-sm flex items-center gap-1.5";
+        chip.style.backgroundColor = `${b.color}30`;
+        chip.style.borderColor = `${b.color}80`;
+        chip.innerText = b.name;
+        tagsContainer.appendChild(chip);
+      });
+
+      // 彈出結算 Modal
+      document.getElementById('result-modal').classList.remove('hidden');
+    }
+
+    /* ==========================================================
+       【全新架構】：實況與評論優先 ➔ 逆向萃取專屬稱號生成引擎
+       ========================================================== */
+    function generateDynamicOutcome(bricks, tags, count, mass, avgAngle, offsetDist) {
+      // 輔助函式：平滑去除語句重複的動詞
+      const cleanVerb = (text) => {
+        return text.replace(/^(在開場|在各章節|將|展示|引用|放上|整理|完整|對比|補充|說明|提出|列出|排練|規劃|統整|分配|忠實|直接|為|套用|穿插|調整|採用)/, '');
+      };
+
+      // 0. 極限邊界：零存活判定
+      if (count === 0) {
+        soundCollapse();
+        return {
+          title: '《整座空掉：什麼都沒準備好的翻車現場》',
+          badge: '零存活・重大失誤',
+          badgeClass: 'bg-rose-950 text-rose-300 border-rose-600 animate-pulse',
+          verdictBoxClass: 'bg-rose-950/60 border-rose-700',
+          stageScene: `
+            講者站在台上許久，投影片與講台上一片空白，沒有放上任何研究項目。台下大家乾等了幾分鐘，全場氣氛降到冰點，最後老師只能搖搖頭直接請下一組同學準備上台。
+          `,
+          critiqueHtml: `
+            <div class="space-y-3 text-xs sm:text-[13px]">
+              <div class="border-l-2 border-rose-500 pl-3">
+                <span class="font-bold text-rose-400">👨‍🏫 指導教授：</span>
+                <span class="text-slate-200">「連最起碼的核心問題或結論都沒拿出來，這不是報告，根本是還沒準備好。」</span>
+              </div>
+              <div class="border-l-2 border-amber-500 pl-3">
+                <span class="font-bold text-amber-300">🙋‍♂️ 同儕評論組：</span>
+                <span class="text-slate-200">「我們這組完全不知道該怎麼評，大家在台下看得很尷尬……」</span>
+              </div>
+            </div>
+          `,
+          critiqueRole: '現場回饋',
+          advice: ['下次務必先把【核心問題】與【結論】這兩塊大石頭放穩，有核心主軸，報告才成型。']
+        };
+      }
+
+      // 物理狀況指標檢測
+      const isLeaning = avgAngle > 13;
+      const isOffCenter = offsetDist > 35;
+      const isOverloaded = count > 8 || mass > 18;
+
+      // ==========================================================
+      // 區塊 1：現場速記（流暢的現場過程敘事，不塞時間軸）
+      // ==========================================================
+      let narrativeParts = [];
+
+      // 開場情況
+      if (tags.signpost.length > 0) {
+        narrativeParts.push(`報告一開始，講者先亮出了「${tags.signpost[0]}」，讓大家清楚知道接下來要講什麼，台下很快就進入狀況。`);
+      } else if (tags.heavy_clutter.length > 0) {
+        narrativeParts.push(`報告一開場，投影片就直接塞滿了「${cleanVerb(tags.heavy_clutter[0])}」，滿滿的小字讓大家眼睛看得有點吃力。`);
+      } else if (tags.literature.length > 0) {
+        narrativeParts.push(`開場時講者花了不少時間說明「${cleanVerb(tags.literature[0])}」，前人背景講得非常詳盡，但台下也開始好奇這組自己的觀點何時出現。`);
+      } else {
+        narrativeParts.push(`講者一上台沒有做太多前言或大綱引導，直接匆忙切入個別細節。`);
+      }
+
+      // 中段過程
+      if (tags.evidence.length > 0 && tags.tilted_bias.length > 0) {
+        narrativeParts.push(`到了論據展開時，投影片秀出了「${cleanVerb(tags.evidence[0])}」，不過隨後提到「${cleanVerb(tags.tilted_bias[0])}」時，引起了評審注意並低頭仔細確認數據。`);
+      } else if (tags.evidence.length > 0) {
+        narrativeParts.push(`中段說明非常扎實，講者透過「${cleanVerb(tags.evidence[0])}」來佐證論點，數據一拿出來，台下頻頻點頭認同。`);
+      } else if (tags.tilted_bias.length > 0) {
+        narrativeParts.push(`講到一半時，投影片出現了「${cleanVerb(tags.tilted_bias[0])}」，論點跳躍得有點大，台下神情開始有些疑惑。`);
+      } else if (tags.rolling_visual.length > 0) {
+        narrativeParts.push(`過程中投影片穿插了「${cleanVerb(tags.rolling_visual[0])}」，視覺上蠻熱鬧的，但大家視線被特效帶著跑，稍微分散了聽講重點。`);
+      } else {
+        narrativeParts.push(`整個報告過程多為文字論述，沒有看到問卷或訪談等一手材料，內容聽起來稍微單薄了些。`);
+      }
+
+      // 收尾與現場反應
+      if (tags.foundation.length === 0) {
+        narrativeParts.push(`時間一到匆促下台，聽完大家互看一眼，依然摸不透這組的核心結論到底想表達什麼。`);
+      } else if (isLeaning || isOffCenter) {
+        narrativeParts.push(`雖然有核心論點，但後續論述偏向單一面向，整場發表聽起來有些頭重腳輕，讓人替講者捏了把冷汗。`);
+      } else if (tags.teamwork.length === 0 && count >= 5) {
+        narrativeParts.push(`到了最後 Q&A 時間，組員在台上互相遞麥克風，似乎沒說好誰該回答，現場氣氛稍微有點混亂。`);
+      } else if (tags.foundation.length > 0 && tags.teamwork.length > 0) {
+        narrativeParts.push(`結尾時組員走位與接話很順暢，清楚歸納出「${cleanVerb(tags.foundation[0])}」，在時間內俐落收尾，全場給出不錯的回應！`);
+      } else {
+        narrativeParts.push(`最後講者在鈴響前順利講完「${cleanVerb(tags.foundation[0])}」，從容結束這場發表。`);
+      }
+
+      const stageSceneHtml = `<p class="text-xs sm:text-[13px] text-slate-200 leading-relaxed">${narrativeParts.join(' ')}</p>`;
+
+      // ==========================================================
+      // 區塊 2：雙角色點評（指導教授 vs 同儕評論組）
+      // ==========================================================
+      const critiques = [];
+
+      // 角色 1：👨‍🏫 指導教授（看研究架構、地基、數據嚴謹度與資訊超載）
+      let profComment = '';
+      if (tags.tilted_bias.length > 0 && tags.limitation.length === 0) {
+        profComment = `「你們在投影片用了『${tags.tilted_bias[0]}』，卻絲毫沒交代研究限制。做研究不能只挑對自己有利的角度解讀，這會讓整個結論失去可信度。」`;
+      } else if (tags.heavy_clutter.length > 0) {
+        profComment = `「簡報不是把所有的草稿全倒出來！放了『${cleanVerb(tags.heavy_clutter[0])}』，字密密麻麻，聽眾根本看不清，這代表你們缺乏整理與剪裁的能力。」`;
+      } else if (tags.foundation.length === 0) {
+        profComment = `「你們找了不少資料，但聽了老半天，最重要的核心問題與解答到底是什麼？整份報告少了骨架，完全站不住腳。」`;
+      } else if (tags.evidence.length === 0) {
+        profComment = `「架構排得中規中矩，但空口無憑，缺乏真實數據或個案佐證，很難說服別人你們的推論是真的。」`;
+      } else if (isLeaning || isOffCenter) {
+        profComment = `「你們花太多篇幅在某個次要細節上，導致論述比重嚴重失衡，聽起來頭重腳輕。」`;
+      } else if (tags.limitation.length > 0) {
+        profComment = `「有主動指出『${tags.limitation[0]}』，態度誠懇而且清楚自己的研究邊界，這點值得肯定。」`;
+      } else {
+        profComment = `「有把『${cleanVerb(tags.foundation[0])}』講清楚，論點明確，整體結構是穩的。」`;
+      }
+      critiques.push(`
+        <div class="border-l-2 border-indigo-500 pl-3">
+          <span class="font-bold text-indigo-300">👨‍🏫 指導教授：</span>
+          <span class="text-slate-200">${profComment}</span>
+        </div>
+      `);
+
+      // 角色 2：🙋‍♂️ 同儕評論組同學（從聽眾角度：排版好不好看、聽不聽得懂、有沒有默契）
+      let peerComment = '';
+      if (tags.teamwork.length === 0 && count >= 5) {
+        peerComment = `「你們好像上台前沒有排練過？Q&A 老師提問時，大家都在互看推麥克風，感覺這份報告是各自拼湊出來的。」`;
+      } else if (tags.heavy_clutter.length > 0) {
+        peerComment = `「那頁投影片字真的太小太多了，後排根本看不到，大家最後都在低頭放空。」`;
+      } else if (tags.rolling_visual.length > 0) {
+        peerComment = `「轉場動畫和梗圖一開始蠻吸睛的，但每頁都在動，看到後面有點不知道你們重點到底在哪。」`;
+      } else if (tags.signpost.length > 0 && tags.evidence.length > 0) {
+        peerComment = `「每頁右上角都有進度標籤，問卷圖表也一目了然，聽你們這組報告很輕鬆、完全不吃力！」`;
+      } else if (tags.evidence.length === 0) {
+        peerComment = `「聽起來都是個人感覺，如果能多放一點問卷數據或訪問別人的內容，會更有說服力。」`;
+      } else if (tags.foundation.length > 0) {
+        peerComment = `「結論講得很清楚，至少聽完之後有記住你們這組想表達的重點。」`;
+      } else {
+        peerComment = `「投影片蠻乾淨的，但內容跳得有點快，如果頁面之間能稍微串接一下會更好懂。」`;
+      }
+      critiques.push(`
+        <div class="border-l-2 border-amber-500 pl-3">
+          <span class="font-bold text-amber-300">🙋‍♂️ 同儕評論組：</span>
+          <span class="text-slate-200">${peerComment}</span>
+        </div>
+      `);
+
+      const critiqueHtml = `<div class="space-y-3 text-xs sm:text-[13px] leading-relaxed">${critiques.join('')}</div>`;
+
+      // ==========================================================
+      // 區塊 3：最終定調（大白話、好懂好笑又有感的標題）
+      // ==========================================================
+      let dynamicTitle = '';
+      let badge = '';
+      let badgeClass = '';
+      let verdictBoxClass = '';
+
+      if (tags.tilted_bias.length > 0 && tags.limitation.length === 0) {
+        soundCollapse();
+        dynamicTitle = '《數據被抓包的翻車現場》';
+        badge = '🚨 致命硬傷・論據灌水';
+        badgeClass = 'bg-rose-950 text-rose-300 border-rose-600 animate-pulse';
+        verdictBoxClass = 'bg-rose-950/40 border-rose-800';
+      } else if (tags.heavy_clutter.length > 0) {
+        soundCollapse();
+        dynamicTitle = '《字小到看不見的視力檢查表報告》';
+        badge = '💥 塞太多・聽眾放棄閱讀';
+        badgeClass = 'bg-rose-950 text-rose-300 border-rose-600 animate-pulse';
+        verdictBoxClass = 'bg-rose-950/40 border-rose-800';
+      } else if (tags.foundation.length === 0) {
+        soundCollapse();
+        dynamicTitle = '《很認真講了15分鐘，但找不到重點的報告》';
+        badge = '⚠️ 沒結論・抓不到核心';
+        badgeClass = 'bg-amber-950 text-amber-300 border-amber-600';
+        verdictBoxClass = 'bg-amber-950/40 border-amber-700';
+      } else if (tags.teamwork.length === 0 && count >= 5) {
+        soundCollapse();
+        dynamicTitle = '《沒事先講好、在台上互相推麥克風的拼裝組》';
+        badge = '🎭 零默契・各自為政';
+        badgeClass = 'bg-amber-950 text-amber-300 border-amber-600';
+        verdictBoxClass = 'bg-amber-950/40 border-amber-700';
+      } else if (isLeaning || isOffCenter) {
+        soundCollapse();
+        dynamicTitle = '《重點放錯地方、越講越心虛的歪斜報告》';
+        badge = '⚡ 比例失衡・頭重腳輕';
+        badgeClass = 'bg-amber-950 text-amber-300 border-amber-600';
+        verdictBoxClass = 'bg-amber-950/40 border-amber-700';
+      } else if (tags.foundation.length > 0 && tags.evidence.length > 0 && tags.signpost.length > 0 && !isOverloaded) {
+        soundSuccess();
+        dynamicTitle = '《有數據、有結論、節奏舒服的教科書級好報告》';
+        badge = '🏆 大獲全勝・黃金結構';
+        badgeClass = 'bg-emerald-950 text-emerald-300 border-emerald-400';
+        verdictBoxClass = 'bg-emerald-950/40 border-emerald-700';
+      } else if (tags.evidence.length === 0) {
+        soundSuccess();
+        dynamicTitle = '《架構很漂亮，但都是個人想法的空飄報告》';
+        badge = '📋 缺實證・說服力不足';
+        badgeClass = 'bg-slate-800 text-slate-300 border-slate-600';
+        verdictBoxClass = 'bg-slate-800/40 border-slate-700';
+      } else {
+        soundSuccess();
+        dynamicTitle = '《有講到重點，但還能更俐落的及格報告》';
+        badge = '📋 安全過關・尚待打磨';
+        badgeClass = 'bg-slate-800 text-slate-300 border-slate-600';
+        verdictBoxClass = 'bg-slate-800/40 border-slate-700';
+      }
+
+      // ==========================================================
+      // 動態處方籤 (Advice)
+      // ==========================================================
+      const dynamicAdvice = [];
+      if (tags.heavy_clutter.length > 0) {
+        dynamicAdvice.push(`學會斷捨離：請把「${tags.heavy_clutter[0]}」放到附錄，投影片不要塞逐字稿或整張大表。`);
+      }
+      if (tags.tilted_bias.length > 0) {
+        dynamicAdvice.push(`別過度推論：拿掉「${tags.tilted_bias[0]}」，有幾分證據說幾分話才不會被電。`);
+      }
+      if (tags.foundation.length === 0) {
+        dynamicAdvice.push(`先立好地基：前三分鐘一定要說清楚【核心研究問題】與【結論】，不能讓聽眾猜。`);
+      }
+      if (tags.evidence.length === 0) {
+        dynamicAdvice.push(`拿出證據：補上【問卷數據或受訪金句】，光說不練很難讓人信服。`);
+      }
+      if (tags.teamwork.length === 0 && count >= 5) {
+        dynamicAdvice.push(`上台前對一次默契：說好問答誰主答、誰補充，不要在台上互看推麥克風。`);
+      }
+      if (dynamicAdvice.length < 2) {
+        dynamicAdvice.push('每頁一個重點就好：簡報不是比誰放的多，而是比誰講得清楚。');
+      }
+
+      return {
+        title: dynamicTitle,
+        badge: badge,
+        badgeClass: badgeClass,
+        verdictBoxClass: verdictBoxClass,
+        stageScene: stageSceneHtml,
+        critiqueHtml: critiqueHtml,
+        critiqueRole: '現場即時回饋',
+        advice: dynamicAdvice.slice(0, 3)
+      };
+    }
+
+    /* ==========================================================
+       9. 視窗載入與事件自適應
+       ========================================================== */
+    window.onload = function() {
+      // 確保容器具有真實尺寸再初始化物理世界
+      width = container.clientWidth || window.innerWidth;
+      height = container.clientHeight || (window.innerHeight - 180);
+
+      initPhysics();
+      initConveyorSystem();
+
+      const startBtn = document.getElementById('start-btn');
+      if (startBtn) {
+        startBtn.addEventListener('click', () => {
+          soundClick();
+          startGame();
+        });
+      }
+
+      const restartBtn = document.getElementById('restart-btn');
+      if (restartBtn) {
+        restartBtn.addEventListener('click', () => {
+          soundClick();
+          startGame();
+        });
+      }
+
+      // 視窗尺寸變更時動態同步畫布與平台
+      window.addEventListener('resize', () => {
+        width = container.clientWidth || window.innerWidth;
+        height = container.clientHeight || (window.innerHeight - 180);
+
+        if (render && render.canvas) {
+          render.bounds.max.x = width;
+          render.bounds.max.y = height;
+          render.options.width = width;
+          render.options.height = height;
+          render.canvas.width = width;
+          render.canvas.height = height;
+        }
+
+        if (basePlatformBody) {
+          Body.setPosition(basePlatformBody, { x: width / 2, y: height - 90 });
+        }
+      });
+    };
+  </script>
+</body>
+</html>
